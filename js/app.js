@@ -1,15 +1,16 @@
 // 配色色卡 · 主程序：路由与各页面
 import {
-  normHex, parseColor, textOn, formats, contrast, wcag, hexToOklch, mix, family, FAMILIES, hexToHsv, hsvToHex,
+  normHex, parseColor, textOn, formats, contrast, wcag, hexToOklch, mix, family, FAMILIES, hexToHsv, hsvToHex, hexToRgb, rng,
 } from './color.js';
 import { state, load, persist, change, subscribe, undo, redo, canUndo, canRedo, hexes, setPalette, uid } from './store.js';
 import { createPicker } from './picker.js';
 import { createWheel } from './wheel.js';
-import { SCHEMES, MOODS, SMART, modeName, generate, runScheme, paletteFor, adjust, nearestName, autoName, scale, tints, shades, tones, fitTo, sortByLight } from './harmony.js';
+import { SCHEMES, MOODS, SMART, modeName, generate, runScheme, paletteFor, randomBase, adjust, nearestName, autoName, scale, tints, shades, tones, fitTo, sortByLight } from './harmony.js';
 import { PREVIEW_TABS, render as renderPreview } from './preview.js';
 import { extract, drawScaled, EXTRACT_MODES } from './extract.js';
 import { TEXT_FORMATS, toText, toASE, drawCard, download } from './export.js';
 import { CN, JP, PALETTES, YEARLY, FAMOUS, FILAMENTS } from './data.js';
+import { loadFile, pixels, detectLevels, buildMap, paint, recolorSvg } from './recolor.js';
 
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => [...el.querySelectorAll(s)];
@@ -89,7 +90,7 @@ $('#theme').addEventListener('click', () => {
 
 // ---------- 路由 ----------
 let current = null;
-const ROUTES = { '': workspace, harmony, image: imageView, library, saved: savedView };
+const ROUTES = { '': workspace, harmony, image: imageView, recolor: recolorView, library, saved: savedView };
 function route() {
   const raw = location.hash.replace(/^#\/?/, '');
   const [path, query] = raw.split('?');
@@ -122,7 +123,8 @@ function workspace() {
       <div class="grp">
         <button class="btn primary" id="gen" title="快捷键：空格">${ICON.dice}<span>生成配色</span></button>
         <button class="btn mode-btn" id="modeBtn" title="浏览所有配色方式的效果（快捷键 M）">${ICON.grid}<span id="modeName"></span>${ICON.down}</button>
-        <label class="check anchor" title="打开时：选中的颜色保持不变，其它颜色按配色方式围绕它生成"><input type="checkbox" id="anchor"> 以选中色为基准</label>
+        <label class="toggle" title="打开时：选中的颜色保持不变，其它颜色按配色方式围绕它生成"><input type="checkbox" id="anchor"><span>以选中色为基准</span></label>
+        <label class="toggle" title="让互补、分裂互补等色彩理论配色的搭配色和基准色一深一浅，对比更明显"><input type="checkbox" id="contrastT"><span>拉开明暗</span></label>
       </div>
       <div class="grp">
         <button class="btn icon" id="undo" title="撤销（⌘/Ctrl+Z）">${ICON.undo}</button>
@@ -190,6 +192,7 @@ function workspace() {
     $('#count').textContent = n;
     $('#modeName').textContent = modeName(state.genMode);
     $('#anchor').checked = state.anchor;
+    $('#contrastT').checked = state.contrast;
     $('#minus').disabled = n <= 2;
     $('#plus').disabled = n >= 10;
     $('#undo').disabled = !canUndo();
@@ -275,6 +278,7 @@ function workspace() {
   $('#gen').onclick = gen;
   $('#modeBtn').onclick = () => openModes(renderStrip);
   $('#anchor').onchange = e => { state.anchor = e.target.checked; persist(); renderStrip(); };
+  $('#contrastT').onchange = e => { state.contrast = e.target.checked; persist(); };
   $('#undo').onclick = () => undo();
   $('#redo').onclick = () => redo();
   $('#minus').onclick = () => change(s => {
@@ -354,7 +358,7 @@ function openModes(onDone) {
     <div class="dlg-h modes-h">
       <div><h3>选择配色方式</h3>
         <p class="muted small">${state.anchor ? `以 <span class="dot" style="background:${base.hex}"></span> <b class="mono">${base.hex}</b> 为基准` : '随机基准色'} · ${state.palette.length} 色${state.palette.some(c => c.locked) ? ' · 锁定的颜色保持不变' : ''} · 点卡片直接使用</p></div>
-      <div class="grp"><label class="check" title="色彩理论配色时，让搭配色和基准色一深一浅，对比更明显"><input type="checkbox" id="mdContrast" ${state.contrast ? 'checked' : ''}> 拉开明暗</label><button class="btn sm" id="mdRoll">${ICON.dice}<span>全部换一组</span></button><button class="btn icon" data-close aria-label="关闭">${ICON.x}</button></div>
+      <div class="grp"><label class="toggle" title="让互补、分裂互补等色彩理论配色的搭配色和基准色一深一浅，对比更明显"><input type="checkbox" id="mdContrast" ${state.contrast ? 'checked' : ''}><span>拉开明暗</span></label><button class="btn sm" id="mdRoll">${ICON.dice}<span>全部换一组</span></button><button class="btn icon" data-close aria-label="关闭">${ICON.x}</button></div>
     </div>
     <div id="mdBody"></div>`, 'xl');
   const body = $('#mdBody', d);
@@ -528,12 +532,11 @@ function harmony() {
       <div id="hmPicker"></div>
       <div class="sub">从当前色卡选一个</div>
       <div class="chips" id="hmFrom"></div>
-      <label class="check hm-contrast" title="让搭配色和基准色一深一浅，对比更明显"><input type="checkbox" id="hmContrast"> 拉开明暗（色彩理论配色）</label>
       <label class="slider-row" id="hmSpreadRow"><span>角度</span><input type="range" id="hmSpread" min="10" max="60"><output id="hmSpreadO"></output></label>
       <p class="hint">拖动色轮上的大圆点改变基础色；「角度」影响类似色、分裂互补、矩形、复合色。</p>
     </aside>
     <div class="hm-main">
-      <div class="hm-count"><span>颜色数量</span><div class="seg" id="hmCount">${[2, 3, 4, 5, 6, 7, 8, 9, 10].map(n => `<button data-n="${n}">${n}</button>`).join('')}</div><span class="muted small">基础色固定在第一个</span></div>
+      <div class="hm-count"><span>颜色数量</span><div class="seg" id="hmCount">${[2, 3, 4, 5, 6, 7, 8, 9, 10].map(n => `<button data-n="${n}">${n}</button>`).join('')}</div><label class="toggle" title="让互补、分裂互补等色彩理论配色的搭配色和基准色一深一浅，对比更明显"><input type="checkbox" id="hmContrast"><span>拉开明暗</span></label><span class="muted small">基础色固定在第一个</span></div>
       <h2 class="sec">色彩理论配色 <small>按色轮关系计算</small></h2>
       <div class="cards" id="hmSchemes"></div>
       <h2 class="sec">风格配色 <small>点 🎲 换一组</small></h2>
@@ -930,6 +933,262 @@ function savedView() {
   };
   paint();
   return {};
+}
+
+// =====================================================================
+// 图案上色：按灰度图的层数自动配色
+// =====================================================================
+const RC_MODES = [SMART, ...SCHEMES, ...MOODS];
+const rc = { img: null, name: '', svgText: null, levels: [], map: null, thumbMap: null, use: [], bgMode: 'orig', mode: 'split', base: null, seeds: {}, assign: {}, realId: '', keepValue: true, tooMany: false };
+const rgbArr = hex => { const o = hexToRgb(hex); return [o.r, o.g, o.b]; };
+
+/** 改色弹窗（取色器 + 当前色卡） */
+function editColorDialog(hex, title, onOk) {
+  const d = openDialog(`
+    <div class="dlg-h"><h3>${esc(title)}</h3><button class="btn icon" data-close aria-label="关闭">${ICON.x}</button></div>
+    <div id="ecPk"></div>
+    <div class="sub">从当前色卡选</div>
+    <div class="chips" id="ecChips">${state.palette.map(c => `<button class="chip-c" data-hex="${c.hex}" style="background:${c.hex}" title="${c.hex}"></button>`).join('')}</div>
+    <div class="dlg-f"><span class="flex"></span><button class="btn" data-close>取消</button><button class="btn primary" id="ecOk">确定</button></div>`, 'sm');
+  let cur = hex;
+  const pk = createPicker($('#ecPk', d), { mode: state.pickerMode, onInput: h => (cur = h), onMode: m => { state.pickerMode = m; persist(); } });
+  pk.set(hex);
+  $('#ecChips', d).onclick = e => { const h = e.target.closest('[data-hex]')?.dataset.hex; if (h) { cur = h; pk.set(h); } };
+  $('#ecOk', d).onclick = () => { d.close(); onOk(cur); };
+}
+
+function recolorView() {
+  view.innerHTML = `
+  <section class="rc">
+    <div class="rc-grid">
+      <div class="panel rc-stage" id="rcStage"></div>
+      <aside class="panel rc-side" id="rcSide"></aside>
+    </div>
+    <div id="rcModes"></div>
+    <input type="file" id="rcFile" accept="image/*,.svg" hidden>
+  </section>`;
+  const stage = $('#rcStage'), side = $('#rcSide'), modesEl = $('#rcModes');
+  if (!rc.base) rc.base = state.palette[state.sel].hex;
+  RC_MODES.forEach((m, i) => { if (rc.seeds[m.id] == null) rc.seeds[m.id] = 1000 + i * 7919; });
+
+  const visible = () => rc.levels.map((l, i) => i).filter(i => rc.map && rc.map.inner[i] / Math.max(1, rc.map.fg) >= 0.002);
+  const active = () => visible().filter(i => rc.use[i]);
+  const bgOrig = () => (rc.map && rc.map.bgLevel >= 0 ? rc.levels[rc.map.bgLevel].rgb : null);
+  /** 需要上色的对象：开启的层 + （可选）背景，带原图明度 */
+  function targets() {
+    const t = active().map(i => ({ key: i, lum: rc.levels[i].lum }));
+    if (rc.bgMode === 'color') t.push({ key: 'bg', lum: rc.map.bgLevel >= 0 ? rc.levels[rc.map.bgLevel].lum + 0.5 : 256 });
+    return t;
+  }
+  function paletteForMode(id, seed) {
+    const tg = targets();
+    if (!tg.length) return { assign: {}, list: [], realId: id };
+    let realId = id;
+    if (id === 'smart') { const pool = [...SCHEMES, ...MOODS].map(m => m.id); realId = pool[Math.floor(rng(seed)() * pool.length)]; }
+    const list = paletteFor(rc.base, realId, tg.length, { wheel: state.wheel, spread: state.spread, contrast: state.contrast, seed });
+    const assign = {};
+    if (rc.keepValue) {
+      const cs = sortByLight(list);
+      [...tg].sort((a, b) => b.lum - a.lum).forEach((t, j) => (assign[t.key] = cs[j]));
+    } else tg.forEach((t, j) => (assign[t.key] = list[j]));
+    return { assign, list: rc.keepValue ? sortByLight(list) : list, realId };
+  }
+  const colsFrom = assign => rc.levels.map((l, i) => (rc.use[i] && assign[i] ? rgbArr(assign[i]) : l.rgb));
+  const bgFrom = assign => (rc.bgMode === 'clear' ? null : rc.bgMode === 'color' ? rgbArr(assign.bg || '#FFFFFF') : bgOrig());
+  function apply(id) { rc.mode = id; const r = paletteForMode(id, rc.seeds[id]); rc.assign = r.assign; rc.realId = r.realId; }
+  /** 当前用到的颜色（从浅到深） */
+  const usedColors = () => sortByLight(targets().map(t => rc.assign[t.key]).filter(Boolean));
+
+  function paintStage() {
+    if (!rc.img) {
+      stage.innerHTML = `<button class="drop" id="rcDrop">${ICON.image}<b>上传灰度图案：拖进来、点击选择，或直接粘贴（⌘/Ctrl + V）</b>
+        <small>支持 SVG / PNG / JPG。程序会识别图里有几种灰度，自动配同样数量的颜色，浅灰配浅色、深灰配深色。<br>图片只在你的浏览器里处理，不会上传。</small></button>`;
+      $('#rcDrop').onclick = () => $('#rcFile').click();
+      side.innerHTML = `<h3>图案上色</h3>
+        <p class="hint">适合剪纸、贴纸、3D 打印分色、刺绣、拼布图样这类由几种纯色组成的图案。</p>
+        <ol class="rc-steps"><li>上传用不同灰度区分各部分的图</li><li>自动识别有几层，配同样数量的颜色</li><li>下方一页看完所有配色方式的效果，点一下使用</li><li>点图上的区域可以单独改色，最后下载 PNG / SVG</li></ol>`;
+      modesEl.innerHTML = '';
+      return;
+    }
+    stage.innerHTML = `<div class="rc-cv checker"><canvas id="rcCv" title="点击图上的区域可以修改这一层的颜色"></canvas></div>
+      <div class="row gap"><span class="muted small rc-name">${esc(rc.name)} · 点图上的区域可以单独改色</span><span class="flex"></span><button class="btn sm" id="rcPick">${ICON.image}<span>换图片</span></button></div>`;
+    $('#rcPick').onclick = () => $('#rcFile').click();
+    $('#rcCv').onclick = e => {
+      const cv = e.currentTarget, r = cv.getBoundingClientRect();
+      const x = Math.min(rc.map.w - 1, Math.floor(((e.clientX - r.left) / r.width) * rc.map.w));
+      const y = Math.min(rc.map.h - 1, Math.floor(((e.clientY - r.top) / r.height) * rc.map.h));
+      const i = y * rc.map.w + x;
+      if (rc.map.bg[i]) return rc.bgMode === 'color' ? edit('bg') : toast('这是外部背景：在右侧把背景设为「也上色」就能改色');
+      const lv = rc.map.A[i];
+      if (!rc.use[lv]) return toast('这一层没有开启上色');
+      edit(lv);
+    };
+  }
+
+  function paintMain() {
+    const cv = $('#rcCv');
+    if (!cv) return;
+    cv.width = rc.map.w; cv.height = rc.map.h;
+    cv.getContext('2d').putImageData(paint(rc.map, colsFrom(rc.assign), bgFrom(rc.assign)), 0, 0);
+  }
+
+  function paintSide() {
+    const vis = visible();
+    const k = targets().length;
+    side.innerHTML = `
+      <div class="panel-h"><h3>识别到 ${vis.length} 层</h3><span class="badge ok">配 ${k} 色</span></div>
+      ${rc.tooMany ? '<p class="hint warn">这张图颜色很多，可能不是纯色图案，只取了面积最大的 10 种。</p>' : ''}
+      <div class="rc-levels">${vis.map((i, n) => {
+        const l = rc.levels[i];
+        const now = rc.use[i] && rc.assign[i] ? rc.assign[i] : l.hex;
+        const pct = Math.max(1, Math.round((rc.map.inner[i] / rc.map.fg) * 100));
+        const tag = i === rc.map.bgLevel ? '和背景同色的内部区域' : n === 0 ? '最浅' : n === vis.length - 1 ? '最深' : '';
+        return `<div class="rc-lv ${rc.use[i] ? '' : 'off'}">
+          <label class="toggle bare" title="是否给这一层上色"><input type="checkbox" data-use="${i}" ${rc.use[i] ? 'checked' : ''}></label>
+          <span class="rc-sw" style="background:${l.hex}" title="原来的颜色 ${l.hex}"></span>
+          <span class="muted">→</span>
+          <button class="rc-sw big" data-edit="${i}" style="background:${now}" title="点击修改这一层的颜色" ${rc.use[i] ? '' : 'disabled'}></button>
+          <div class="rc-lv-t"><b>${now}</b><small>原 ${l.hex} · 占 ${pct}%${tag ? ' · ' + tag : ''}</small></div>
+        </div>`;
+      }).join('')}</div>
+      <div class="sub">外部背景</div>
+      <div class="row gap wrap"><div class="seg" id="rcBg"><button data-b="orig">原样</button><button data-b="clear">透明</button><button data-b="color">也上色</button></div>
+        ${rc.bgMode === 'color' && rc.assign.bg ? `<button class="rc-sw big" data-edit="bg" style="background:${rc.assign.bg}" title="点击修改背景色"></button>` : ''}</div>
+      <div class="sub">配色设置</div>
+      <div class="row gap wrap"><span class="small muted">基础色</span><button class="rc-sw big" id="rcBase" style="background:${rc.base}" title="点击修改基础色"></button><code class="small">${rc.base}</code>
+        <button class="btn icon sm" id="rcBaseRand" title="随机换一个基础色">${ICON.dice}</button><button class="btn sm" id="rcBaseWs">用工作台选中色</button></div>
+      <div class="row gap wrap rc-opts">
+        <label class="toggle" title="让互补、分裂互补等色彩理论配色的搭配色和基础色一深一浅"><input type="checkbox" id="rcContrast" ${state.contrast ? 'checked' : ''}><span>拉开明暗</span></label>
+        <label class="toggle" title="原图浅的部分配浅色，深的部分配深色"><input type="checkbox" id="rcKeep" ${rc.keepValue ? 'checked' : ''}><span>保持原图明暗</span></label>
+      </div>
+      <div class="sub">当前配色 <small>${esc(modeName(rc.mode))}${rc.mode === 'smart' && rc.realId ? ' · ' + esc(modeName(rc.realId)) : ''}</small></div>
+      ${stripHtml(usedColors())}
+      <div class="row gap wrap rc-ex">
+        <button class="btn primary" id="rcPng">${ICON.download}<span>下载 PNG</span></button>
+        ${rc.svgText ? `<button class="btn" id="rcSvg" title="保持矢量，只替换颜色">${ICON.download}<span>下载 SVG</span></button>` : ''}
+        <button class="btn" id="rcWs">放进工作台</button>
+        <button class="btn" id="rcSave">${ICON.heart}<span>保存色卡</span></button>
+      </div>`;
+    $$('#rcBg button', side).forEach(b => b.classList.toggle('on', b.dataset.b === rc.bgMode));
+  }
+
+  function drawThumb(id) {
+    const el = modesEl.querySelector(`.rc-th[data-id="${id}"]`);
+    if (!el) return;
+    const r = paletteForMode(id, rc.seeds[id]);
+    const assign = id === rc.mode ? rc.assign : r.assign;
+    const cv = el.querySelector('canvas');
+    cv.width = rc.thumbMap.w; cv.height = rc.thumbMap.h;
+    cv.getContext('2d').putImageData(paint(rc.thumbMap, colsFrom(assign), bgFrom(assign)), 0, 0);
+    el.querySelector('.rc-th-s').innerHTML = r.list.map(h => `<span style="background:${h}"></span>`).join('');
+    if (id === 'smart') el.querySelector('b').innerHTML = `智能随机 <small class="muted">· ${esc(modeName(r.realId))}</small>`;
+  }
+  function paintThumbs() {
+    modesEl.innerHTML = `
+      <div class="rc-modes-h"><h2 class="sec">选择配色方式 <small>每种方式套在你的图案上的效果，点一下使用</small></h2>
+        <button class="btn sm" id="rcRollAll">${ICON.dice}<span>全部换一组</span></button></div>
+      <div class="rc-thumbs">${RC_MODES.map(m => `
+        <div class="rc-th ${rc.mode === m.id ? 'on' : ''}" data-id="${m.id}" tabindex="0" title="${esc(m.desc)}">
+          <div class="rc-th-img checker"><canvas></canvas></div>
+          <div class="rc-th-b"><b>${m.name}</b><button class="btn icon sm" data-roll title="换一组">${ICON.dice}</button></div>
+          <div class="rc-th-s"></div>
+        </div>`).join('')}</div>`;
+    RC_MODES.forEach(m => drawThumb(m.id));
+  }
+
+  const refreshAll = () => { apply(rc.mode); paintSide(); paintMain(); paintThumbs(); };
+  const refreshMain = () => { paintSide(); paintMain(); drawThumb(rc.mode); };
+  function edit(key) {
+    const cur = key === 'bg' ? rc.assign.bg : rc.assign[key];
+    editColorDialog(cur, key === 'bg' ? '修改背景色' : '修改这一层的颜色', hex => { rc.assign[key] = hex; refreshMain(); });
+  }
+
+  async function load(file) {
+    if (!file) return;
+    try {
+      const { img, svgText } = await loadFile(file);
+      const data = pixels(img, 900);
+      const det = detectLevels(data);
+      if (!det.levels.length) throw new Error('没有识别到颜色，图片可能是全透明的');
+      Object.assign(rc, { img, name: file.name, svgText, levels: det.levels, tooMany: det.tooMany });
+      rc.map = buildMap(data, det.levels);
+      rc.thumbMap = buildMap(pixels(img, 240), det.levels);
+      rc.use = det.levels.map(() => true);
+      paintStage();
+      refreshAll();
+      toast(`识别到 ${visible().length} 层，已配 ${targets().length} 色`);
+    } catch (err) { toast(err.message || '读取失败'); }
+  }
+
+  // --- 事件 ---
+  $('#rcFile').onchange = e => { load(e.target.files[0]); e.target.value = ''; };
+  stage.addEventListener('dragover', e => { e.preventDefault(); stage.classList.add('over'); });
+  stage.addEventListener('dragleave', () => stage.classList.remove('over'));
+  stage.addEventListener('drop', e => { e.preventDefault(); stage.classList.remove('over'); load(e.dataTransfer.files[0]); });
+  const onPaste = e => { const f = [...(e.clipboardData?.files || [])].find(f => f.type.startsWith('image/')); if (f) { e.preventDefault(); load(f); } };
+  document.addEventListener('paste', onPaste);
+
+  side.addEventListener('change', e => {
+    const t = e.target;
+    if (t.dataset.use != null) { rc.use[+t.dataset.use] = t.checked; refreshAll(); }
+    else if (t.id === 'rcContrast') { state.contrast = t.checked; persist(); refreshAll(); }
+    else if (t.id === 'rcKeep') { rc.keepValue = t.checked; refreshAll(); }
+  });
+  side.addEventListener('click', e => {
+    const b = e.target.closest('button');
+    if (!b) { const h = e.target.closest('[data-hex]'); if (h) copy(h.dataset.hex); return; }
+    if (b.dataset.edit != null) return edit(b.dataset.edit === 'bg' ? 'bg' : +b.dataset.edit);
+    if (b.dataset.b) { rc.bgMode = b.dataset.b; return refreshAll(); }
+    switch (b.id) {
+      case 'rcBase': return editColorDialog(rc.base, '修改基础色', h => { rc.base = h; refreshAll(); });
+      case 'rcBaseRand': rc.base = randomBase(rng(Date.now())); return refreshAll();
+      case 'rcBaseWs': rc.base = state.palette[state.sel].hex; return refreshAll();
+      case 'rcPng': {
+        const map = buildMap(pixels(rc.img, 2400), rc.levels);
+        const c = document.createElement('canvas');
+        c.width = map.w; c.height = map.h;
+        c.getContext('2d').putImageData(paint(map, colsFrom(rc.assign), bgFrom(rc.assign)), 0, 0);
+        return c.toBlob(bl => download(rc.name.replace(/\.[^.]+$/, '') + '-上色.png', bl));
+      }
+      case 'rcSvg': {
+        const vis = visible();
+        const out = rc.levels.map((l, i) => (vis.includes(i) && rc.use[i] && rc.assign[i] ? rc.assign[i] : null));
+        // 背景本身就是 SVG 里的一个色块（比如白色底）：按背景设置处理
+        const bl = rc.map.bgLevel;
+        if (bl >= 0 && !out[bl]) out[bl] = rc.bgMode === 'color' ? rc.assign.bg : rc.bgMode === 'clear' ? 'none' : null;
+        const txt = recolorSvg(rc.svgText, rc.levels, out, rc.bgMode === 'color' && bl < 0 ? rc.assign.bg : null);
+        return download(rc.name.replace(/\.[^.]+$/, '') + '-上色.svg', txt, 'image/svg+xml');
+      }
+      case 'rcWs': { const l = usedColors(); if (l.length < 2) return toast('至少要有 2 个颜色才能放进工作台'); setPalette(l.slice(0, 10)); location.hash = '#/'; return toast('已放进工作台'); }
+      case 'rcSave': {
+        const l = usedColors();
+        if (!l.length) return;
+        const name = rc.name.replace(/\.[^.]+$/, '') + ' 配色';
+        state.saved.unshift({ id: uid(), name, colors: l.map(hex => ({ hex, name: '' })), created: Date.now(), updated: Date.now() });
+        persist(); return toast(`已保存「${name}」`);
+      }
+    }
+  });
+  modesEl.addEventListener('click', e => {
+    if (e.target.closest('#rcRollAll')) { Object.keys(rc.seeds).forEach(k => (rc.seeds[k] += 104729)); return refreshAll(); }
+    const th = e.target.closest('.rc-th');
+    if (!th) return;
+    const id = th.dataset.id;
+    if (e.target.closest('[data-roll]')) {
+      rc.seeds[id] += 104729;
+      if (id === rc.mode) { apply(id); refreshMain(); } else drawThumb(id);
+      return;
+    }
+    apply(id);
+    $$('.rc-th', modesEl).forEach(x => x.classList.toggle('on', x === th));
+    paintSide(); paintMain(); drawThumb(id);
+    stage.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  });
+  modesEl.addEventListener('keydown', e => { if (e.key === 'Enter' && e.target.classList.contains('rc-th')) e.target.click(); });
+
+  paintStage();
+  if (rc.img) refreshAll();
+  return { destroy: () => document.removeEventListener('paste', onPaste) };
 }
 
 // ---------- 启动 ----------
