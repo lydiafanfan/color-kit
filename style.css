@@ -155,6 +155,8 @@ input[type=range] { accent-color: var(--accent); width: 100%; }
 .mode-btn svg:last-child { width: 15px; height: 15px; opacity: .6; }
 .anchor { margin-left: 4px; }
 .hm-contrast { margin: 14px 0 2px; }
+.hm-count { position: sticky; top: 64px; z-index: 5; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin: -6px 0 16px; padding: 8px 0; background: var(--bg); font-weight: 600; }
+.hm-count .seg button { min-width: 34px; }
 .col-hex { font-size: clamp(16px, 1.9vw, 24px); font-weight: 700; letter-spacing: .04em; font-family: var(--mono); cursor: copy; padding: 2px 6px; border-radius: 6px; }
 .col-hex:hover { background: color-mix(in srgb, currentColor 12%, transparent); }
 .col-name { font-size: 13px; opacity: .8; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

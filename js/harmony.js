@@ -218,6 +218,21 @@ export function generate(palette, modeId = 'smart', wheel = 'ryb', seed = Date.n
   let k = 0;
   return Object.assign(palette.map((c, i) => (fixed[i] ? c.hex : fill[k++])), { mode: id });
 }
+/**
+ * 自动配色页用：以 base 为基准生成 n 色
+ * 色彩理论：基准色在第一位，按重要程度取搭配色，不够时补深浅变化
+ * 风格配色：保持整体构成，少于 5 色时均匀抽取，多于 5 色时在相邻颜色间补过渡色
+ */
+export function paletteFor(base, id, n, { wheel = 'ryb', spread = 30, contrast = true, seed = 1 } = {}) {
+  const scheme = SCHEMES.find(s => s.id === id);
+  if (scheme) {
+    const cols = runScheme(scheme, base, wheel, spread, contrast);
+    return [base, ...extend(cols.slice(1), n - 1, [base])];
+  }
+  const mood = MOODS.find(m => m.id === id);
+  return fitTo(mood.gen(base, rng(seed)), n);
+}
+
 /** 颜色不够时，用已有颜色的深浅变化补足，避免重复 */
 function extend(pool, need, refs) {
   const out = pool.slice(0, need);

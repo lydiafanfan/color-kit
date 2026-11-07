@@ -5,7 +5,7 @@ import {
 import { state, load, persist, change, subscribe, undo, redo, canUndo, canRedo, hexes, setPalette, uid } from './store.js';
 import { createPicker } from './picker.js';
 import { createWheel } from './wheel.js';
-import { SCHEMES, MOODS, SMART, modeName, generate, runScheme, adjust, nearestName, autoName, scale, tints, shades, tones, fitTo, sortByLight } from './harmony.js';
+import { SCHEMES, MOODS, SMART, modeName, generate, runScheme, paletteFor, adjust, nearestName, autoName, scale, tints, shades, tones, fitTo, sortByLight } from './harmony.js';
 import { PREVIEW_TABS, render as renderPreview } from './preview.js';
 import { extract, drawScaled, EXTRACT_MODES } from './extract.js';
 import { TEXT_FORMATS, toText, toASE, drawCard, download } from './export.js';
@@ -533,6 +533,7 @@ function harmony() {
       <p class="hint">拖动色轮上的大圆点改变基础色；「角度」影响类似色、分裂互补、矩形、复合色。</p>
     </aside>
     <div class="hm-main">
+      <div class="hm-count"><span>颜色数量</span><div class="seg" id="hmCount">${[2, 3, 4, 5, 6, 7, 8, 9, 10].map(n => `<button data-n="${n}">${n}</button>`).join('')}</div><span class="muted small">基础色固定在第一个</span></div>
       <h2 class="sec">色彩理论配色 <small>按色轮关系计算</small></h2>
       <div class="cards" id="hmSchemes"></div>
       <h2 class="sec">风格配色 <small>点 🎲 换一组</small></h2>
@@ -567,8 +568,10 @@ function harmony() {
     $('#hmV').value = v; $('#hmVo').textContent = v;
     $('#hmSpreadO').textContent = state.spread + '°';
     $('#hmFrom').innerHTML = state.palette.map(c => `<button class="chip-c ${c.hex === b ? 'on' : ''}" style="background:${c.hex}" data-hex="${c.hex}" title="${c.hex}"></button>`).join('');
-    SCHEMES.forEach(s => { const l = runScheme(s, b, state.wheel, state.spread, state.contrast); lists[s.id] = ['mono', 'shades'].includes(s.id) ? sortByLight(l) : l; });
-    MOODS.forEach(m => { let r = seeds[m.id] >>> 0; const rnd = () => ((r = (r * 1664525 + 1013904223) >>> 0) / 4294967296); lists[m.id] = m.gen(b, rnd); });
+    const N = state.harmonyCount;
+    $$('#hmCount button').forEach(x => x.classList.toggle('on', +x.dataset.n === N));
+    SCHEMES.forEach(s => { const l = paletteFor(b, s.id, N, { wheel: state.wheel, spread: state.spread, contrast: state.contrast }); lists[s.id] = ['mono', 'shades'].includes(s.id) ? sortByLight(l) : l; });
+    MOODS.forEach(m => { lists[m.id] = paletteFor(b, m.id, N, { seed: seeds[m.id] }); });
     $('#hmSchemes').innerHTML = SCHEMES.map(s => card('scheme', s, lists[s.id])).join('');
     $('#hmMoods').innerHTML = MOODS.map(m => card('mood', m, lists[m.id])).join('');
     const rows = [['色阶 50–900', scale(b, 10)], ['加白（浅色）', tints(b, 10)], ['加黑（深色）', shades(b, 10)], ['加灰（降饱和）', tones(b, 10)]];
@@ -594,6 +597,7 @@ function harmony() {
   $('#hmScales').addEventListener('click', e => { const r = e.target.closest('[data-row]'); if (r) return use(lists._rows[+r.dataset.row]); const h = e.target.closest('[data-hex]'); if (h) copy(h.dataset.hex); });
   $('#hmMode').onclick = e => { const m = e.target.closest('button')?.dataset.m; if (m) { state.wheel = m; persist(); paint(); } };
   $('#hmV').oninput = e => { const o = hexToHsv(state.harmonyBase); setBase(hsvToHex({ ...o, v: +e.target.value })); };
+  $('#hmCount').onclick = e => { const n = +e.target.closest('button')?.dataset.n; if (n) { state.harmonyCount = n; persist(); paint(); } };
   $('#hmContrast').checked = state.contrast;
   $('#hmContrast').onchange = e => { state.contrast = e.target.checked; persist(); paint(); };
   $('#hmSpread').oninput = e => { state.spread = +e.target.value; persist(); nextFrame(paint); };
