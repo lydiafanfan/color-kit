@@ -15,12 +15,13 @@ export const state = {
   previewDark: false,
   roleShift: 0,
   genMode: 'smart',
+  anchor: true,       // 生成时以选中的颜色为基准
   harmonyBase: '#2A9D8F',
   spread: 30,
   currentSavedId: null,
 };
 
-const PERSIST = ['palette', 'sel', 'saved', 'theme', 'wheel', 'pickerMode', 'previewTab', 'previewDark', 'genMode', 'harmonyBase', 'spread', 'currentSavedId'];
+const PERSIST = ['palette', 'sel', 'saved', 'theme', 'wheel', 'pickerMode', 'previewTab', 'previewDark', 'genMode', 'anchor', 'harmonyBase', 'spread', 'currentSavedId'];
 
 export function load() {
   try {

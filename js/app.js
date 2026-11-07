@@ -5,7 +5,7 @@ import {
 import { state, load, persist, change, subscribe, undo, redo, canUndo, canRedo, hexes, setPalette, uid } from './store.js';
 import { createPicker } from './picker.js';
 import { createWheel } from './wheel.js';
-import { SCHEMES, MOODS, GEN_MODES, generate, adjust, nearestName, autoName, scale, tints, shades, tones, fitTo, sortByLight } from './harmony.js';
+import { SCHEMES, MOODS, SMART, modeName, generate, adjust, nearestName, autoName, scale, tints, shades, tones, fitTo, sortByLight } from './harmony.js';
 import { PREVIEW_TABS, render as renderPreview } from './preview.js';
 import { extract, drawScaled, EXTRACT_MODES } from './extract.js';
 import { TEXT_FORMATS, toText, toASE, drawCard, download } from './export.js';
@@ -40,6 +40,8 @@ const ICON = {
   plus: I('<path d="M12 5v14M5 12h14"/>'),
   sort: I('<path d="M7 4v16m0 0-3-3m3 3 3-3M17 20V4m0 0-3 3m3-3 3 3"/>'),
   sliders: I('<path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/>'),
+  grid: I('<rect x="3.5" y="3.5" width="7" height="7" rx="1.5"/><rect x="13.5" y="3.5" width="7" height="7" rx="1.5"/><rect x="3.5" y="13.5" width="7" height="7" rx="1.5"/><rect x="13.5" y="13.5" width="7" height="7" rx="1.5"/>'),
+  down: I('<path d="m7 10 5 5 5-5"/>'),
   wand: I('<path d="m4 20 11-11M14 4v2M19 9h2M17.5 5.5 19 4M17.5 12.5 19 14M10 5.5 8.5 4"/>'),
 };
 
@@ -119,7 +121,8 @@ function workspace() {
     <div class="toolbar">
       <div class="grp">
         <button class="btn primary" id="gen" title="快捷键：空格">${ICON.dice}<span>生成配色</span></button>
-        <select class="select" id="genMode" title="生成方式">${GEN_MODES.map(([id, n]) => `<option value="${id}">${n}</option>`).join('')}</select>
+        <button class="btn mode-btn" id="modeBtn" title="浏览所有配色方式的效果（快捷键 M）">${ICON.grid}<span id="modeName"></span>${ICON.down}</button>
+        <label class="check anchor" title="打开时：选中的颜色保持不变，其它颜色按配色方式围绕它生成"><input type="checkbox" id="anchor"> 以选中色为基准</label>
       </div>
       <div class="grp">
         <button class="btn icon" id="undo" title="撤销（⌘/Ctrl+Z）">${ICON.undo}</button>
@@ -138,7 +141,7 @@ function workspace() {
       </div>
     </div>
     <div class="strip" id="strip"></div>
-    <p class="tip"><kbd>空格</kbd> 换一组 · <kbd>←</kbd><kbd>→</kbd> 切换颜色 · <kbd>L</kbd> 锁定 · 拖动色块可调换顺序 · 两色之间的 <b>+</b> 插入中间色</p>
+    <p class="tip"><kbd>空格</kbd> 换一组 · <kbd>M</kbd> 看所有配色方式 · <kbd>←</kbd><kbd>→</kbd> 切换颜色 · <kbd>L</kbd> 锁定 · 拖动色块可调换顺序 · 两色之间的 <b>+</b> 插入中间色</p>
     <div class="ws-bottom">
       <div class="panel" id="editor">
         <div class="panel-h"><h3>编辑颜色 <span class="muted" id="edIdx"></span></h3>
@@ -160,7 +163,6 @@ function workspace() {
   </section>`;
 
   const strip = $('#strip');
-  $('#genMode').value = state.genMode;
   const picker = createPicker($('#picker'), {
     mode: state.pickerMode,
     onInput: hex => change(s => { s.palette[s.sel].hex = hex; }, { merge: true, source: 'picker' }),
@@ -180,12 +182,14 @@ function workspace() {
           <button class="ct" data-act="copy" title="复制 HEX">${ICON.copy}</button>
           <button class="ct lock" data-act="lock" title="${c.locked ? '解锁' : '锁定（生成时保留）'}">${c.locked ? ICON.lock : ICON.unlock}</button>
         </div>
-        <div class="col-label"><div class="col-hex" data-act="copy" title="点击复制">${c.hex.slice(1)}</div><div class="col-name">${esc(nameOf(c))}</div></div>
+        <div class="col-label">${state.anchor && i === state.sel ? '<span class="col-base">基准色</span>' : ''}<div class="col-hex" data-act="copy" title="点击复制">${c.hex.slice(1)}</div><div class="col-name">${esc(nameOf(c))}</div></div>
         ${i < n - 1 && n < 10 ? `<button class="ins" data-act="ins" title="在这里插入一个中间色">${ICON.plus}</button>` : ''}
         ${sh}
       </div>`;
     }).join('');
     $('#count').textContent = n;
+    $('#modeName').textContent = modeName(state.genMode);
+    $('#anchor').checked = state.anchor;
     $('#minus').disabled = n <= 2;
     $('#plus').disabled = n >= 10;
     $('#undo').disabled = !canUndo();
@@ -267,12 +271,10 @@ function workspace() {
   });
 
   // --- 事件：工具栏 ---
-  const gen = () => {
-    const out = generate(state.palette, state.genMode, state.wheel, Date.now());
-    change(s => { s.palette = s.palette.map((c, i) => (c.locked ? c : { hex: out[i], locked: false, name: '' })); s.currentSavedId = null; });
-  };
+  const gen = () => applyGen(generate(state.palette, state.genMode, state.wheel, Date.now(), state.anchor ? state.sel : -1));
   $('#gen').onclick = gen;
-  $('#genMode').onchange = e => { state.genMode = e.target.value; persist(); gen(); };
+  $('#modeBtn').onclick = () => openModes(renderStrip);
+  $('#anchor').onchange = e => { state.anchor = e.target.checked; persist(); renderStrip(); };
   $('#undo').onclick = () => undo();
   $('#redo').onclick = () => redo();
   $('#minus').onclick = () => change(s => {
@@ -316,6 +318,7 @@ function workspace() {
       e.preventDefault(); state.sel = (state.sel + (e.key === 'ArrowRight' ? 1 : -1) + state.palette.length) % state.palette.length; shadesFor = -1; renderAll();
     } else if (e.key.toLowerCase() === 'l') change(s => { s.palette[s.sel].locked = !s.palette[s.sel].locked; });
     else if (e.key.toLowerCase() === 'c') copy(state.palette[state.sel].hex);
+    else if (e.key.toLowerCase() === 'm') openModes(renderStrip);
   };
   document.addEventListener('keydown', onKey);
 
@@ -327,6 +330,61 @@ function workspace() {
     },
     destroy() { document.removeEventListener('keydown', onKey); },
   };
+}
+
+/** 把生成结果写进色卡（锁定和基准色不变） */
+function applyGen(out) {
+  const keepIdx = state.anchor ? state.sel : -1;
+  change(s => {
+    s.palette = s.palette.map((c, i) => (c.locked || i === keepIdx || c.hex === out[i] ? c : { hex: out[i], locked: false, name: '' }));
+    s.currentSavedId = null;
+  });
+  if (state.genMode === 'smart' && out.mode) toast(`这次用了：${modeName(out.mode)}`);
+}
+
+// ---------- 配色方式总览 ----------
+function openModes(onDone) {
+  const seeds = {};
+  const all = [['理论', SMART], ...SCHEMES.map(s => ['理论', s]), ...MOODS.map(m => ['风格', m])];
+  all.forEach(([, m], i) => (seeds[m.id] = Date.now() + i * 7919));
+  const anchor = () => (state.anchor ? state.sel : -1);
+  const results = {};
+  const base = state.palette[state.sel];
+  const d = openDialog(`
+    <div class="dlg-h modes-h">
+      <div><h3>选择配色方式</h3>
+        <p class="muted small">${state.anchor ? `以 <span class="dot" style="background:${base.hex}"></span> <b class="mono">${base.hex}</b> 为基准` : '随机基准色'} · ${state.palette.length} 色${state.palette.some(c => c.locked) ? ' · 锁定的颜色保持不变' : ''} · 点卡片直接使用</p></div>
+      <div class="grp"><button class="btn sm" id="mdRoll">${ICON.dice}<span>全部换一组</span></button><button class="btn icon" data-close aria-label="关闭">${ICON.x}</button></div>
+    </div>
+    <div id="mdBody"></div>`, 'xl');
+  const body = $('#mdBody', d);
+  const card = m => {
+    const out = (results[m.id] = generate(state.palette, m.id, state.wheel, seeds[m.id], anchor()));
+    return `<div class="card mode-card ${state.genMode === m.id ? 'focus' : ''}" data-id="${m.id}" tabindex="0">
+      ${stripHtml(out, 'card-strip')}
+      <div class="card-b"><div><b>${m.name}${m.id === 'smart' && out.mode ? ` <small class="muted">· ${modeName(out.mode)}</small>` : ''}</b><p>${m.desc}</p></div>
+        <button class="btn icon sm" data-act="roll" title="换一组">${ICON.dice}</button></div></div>`;
+  };
+  const paint = () => {
+    body.innerHTML = `
+      <h4 class="sub">色彩理论 <small>按色轮关系计算，基准色不变</small></h4>
+      <div class="cards">${all.filter(a => a[0] === '理论').map(a => card(a[1])).join('')}</div>
+      <h4 class="sub">风格 <small>按风格规则生成，会参考基准色的色相</small></h4>
+      <div class="cards">${all.filter(a => a[0] === '风格').map(a => card(a[1])).join('')}</div>`;
+  };
+  body.addEventListener('click', e => {
+    const c = e.target.closest('.mode-card');
+    if (!c) return;
+    const id = c.dataset.id;
+    if (e.target.closest('[data-act=roll]')) { seeds[id] += 104729; c.outerHTML = card(all.find(a => a[1].id === id)[1]); return; }
+    state.genMode = id; persist();
+    applyGen(results[id]);
+    d.close();
+    onDone && onDone();
+  });
+  body.addEventListener('keydown', e => { if (e.key === 'Enter' && e.target.classList.contains('mode-card')) e.target.click(); });
+  $('#mdRoll', d).onclick = () => { Object.keys(seeds).forEach(k => (seeds[k] += 104729)); paint(); };
+  paint();
 }
 
 function currentTitle() {
@@ -507,7 +565,7 @@ function harmony() {
     $('#hmV').value = v; $('#hmVo').textContent = v;
     $('#hmSpreadO').textContent = state.spread + '°';
     $('#hmFrom').innerHTML = state.palette.map(c => `<button class="chip-c ${c.hex === b ? 'on' : ''}" style="background:${c.hex}" data-hex="${c.hex}" title="${c.hex}"></button>`).join('');
-    SCHEMES.forEach(s => (lists[s.id] = s.gen(b, state.wheel, state.spread)));
+    SCHEMES.forEach(s => { const l = s.gen(b, state.wheel, state.spread); lists[s.id] = ['mono', 'shades'].includes(s.id) ? sortByLight(l) : l; });
     MOODS.forEach(m => { let r = seeds[m.id] >>> 0; const rnd = () => ((r = (r * 1664525 + 1013904223) >>> 0) / 4294967296); lists[m.id] = m.gen(b, rnd); });
     $('#hmSchemes').innerHTML = SCHEMES.map(s => card('scheme', s, lists[s.id])).join('');
     $('#hmMoods').innerHTML = MOODS.map(m => card('mood', m, lists[m.id])).join('');

@@ -47,24 +47,25 @@ export const SCHEMES = [
       const targets = [0.95, 0.82, 0.66, 0.5, 0.33];
       let near = 0;
       targets.forEach((t, i) => { if (Math.abs(t - L) < Math.abs(targets[near] - L)) near = i; });
-      return targets.map((t, i) => i === near ? b : oklchToHex({ L: t, C: C * (1 - Math.abs(t - L) * 0.7), h }));
+      const others = targets.filter((t, i) => i !== near).sort((p, q) => Math.abs(q - L) - Math.abs(p - L));
+      return [b, ...others.map(t => oklchToHex({ L: t, C: C * (1 - Math.abs(t - L) * 0.7), h }))];
     } },
   { id: 'analog', name: '类似色', desc: '色轮上相邻的颜色，和谐自然', usesSpread: true,
-    gen: (b, m, a) => [rot(b, -a, m, { dl: 8 }), rot(b, -a / 2, m, { dl: 4 }), b, rot(b, a / 2, m, { dl: -4 }), rot(b, a, m, { dl: -8 })] },
+    gen: (b, m, a) => [b, rot(b, a, m, { dl: -8 }), rot(b, -a, m, { dl: 8 }), rot(b, a / 2, m, { dl: -4 }), rot(b, -a / 2, m, { dl: 4 })] },
   { id: 'comp', name: '互补色', desc: '色轮正对面的颜色，对比强烈、醒目', usesSpread: false,
-    gen: (b, m) => [tint(b, 0.55), b, tint(b, -0.35), rot(b, 180, m), tint(rot(b, 180, m), 0.5)] },
+    gen: (b, m) => [b, rot(b, 180, m), tint(b, 0.55), tint(rot(b, 180, m), 0.5), tint(b, -0.35)] },
   { id: 'split', name: '分裂互补', desc: '补色两侧的颜色，有对比又不刺眼', usesSpread: true,
-    gen: (b, m, a) => [tint(b, 0.6), b, rot(b, 180 - a, m), rot(b, 180 + a, m), tint(rot(b, 180 + a, m), -0.35)] },
+    gen: (b, m, a) => [b, rot(b, 180 - a, m), rot(b, 180 + a, m), tint(b, 0.6), tint(rot(b, 180 + a, m), -0.35)] },
   { id: 'triad', name: '三角色', desc: '色轮上等距的三色，活泼平衡', usesSpread: false,
-    gen: (b, m) => [b, tint(b, 0.55), rot(b, 120, m), rot(b, 240, m), tint(rot(b, 240, m), -0.3)] },
+    gen: (b, m) => [b, rot(b, 120, m), rot(b, 240, m), tint(b, 0.55), tint(rot(b, 240, m), -0.3)] },
   { id: 'tetrad', name: '矩形四色', desc: '两组互补色，丰富多彩，建议一色为主', usesSpread: true,
     gen: (b, m, a) => [b, rot(b, a * 2, m), rot(b, 180, m), rot(b, 180 + a * 2, m), tint(b, 0.7)] },
   { id: 'square', name: '正方形四色', desc: '色轮上等距的四色，热闹饱满', usesSpread: false,
     gen: (b, m) => [b, rot(b, 90, m), rot(b, 180, m), rot(b, 270, m), tint(b, -0.55)] },
   { id: 'compound', name: '复合色', desc: '类似色 + 互补色，层次丰富', usesSpread: true,
-    gen: (b, m, a) => [b, rot(b, a, m, { dl: -10 }), tint(b, 0.6), rot(b, 180, m), rot(b, 180 + a, m, { dl: 10 })] },
+    gen: (b, m, a) => [b, rot(b, 180, m), rot(b, a, m, { dl: -10 }), rot(b, 180 + a, m, { dl: 10 }), tint(b, 0.6)] },
   { id: 'shades', name: '明暗阶梯', desc: '同一颜色从浅到深', usesSpread: false,
-    gen: b => [tint(b, 0.75), tint(b, 0.45), b, tint(b, -0.3), tint(b, -0.55)] },
+    gen: b => [b, tint(b, 0.6), tint(b, -0.45), tint(b, 0.3), tint(b, -0.2)] },
 ];
 
 // ---------- 风格配色（在 OKLCH 里按规则生成，可"换一组"） ----------
@@ -164,32 +165,50 @@ export function randomBase(r) {
   const h = r() * 360;
   return oklchToHex({ L: 0.45 + r() * 0.4, C: 0.06 + r() * 0.14, h });
 }
-/** palette: [{hex, locked}]；返回新的 hex 数组 */
-export function generate(palette, modeId = 'smart', wheel = 'ryb', seed = Date.now()) {
+export const SMART = { id: 'smart', name: '智能随机', desc: '每次随机挑一种配色方式' };
+const SMART_POOL = ['analog', 'comp', 'split', 'triad', 'mono', 'compound', 'morandi', 'macaron', 'dopamine', 'maillard', 'earth', 'vintage', 'fresh', 'minimal', 'chinese', 'gradient', 'tetrad'];
+export const modeName = id => (id === 'smart' ? SMART.name : (SCHEMES.find(s => s.id === id) || MOODS.find(m => m.id === id) || {}).name || id);
+
+/**
+ * palette: [{hex, locked}]；anchor：作为基准的颜色序号（-1 表示不指定）
+ * 基准色和锁定的颜色保持不动，其余位置按配色方式填入。
+ * 返回 hex 数组，数组的 .mode 为实际使用的配色方式（智能随机时有用）
+ */
+export function generate(palette, modeId = 'smart', wheel = 'ryb', seed = Date.now(), anchor = -1) {
   const r = rng(seed);
   const n = palette.length;
-  const locked = palette.filter(c => c.locked).map(c => c.hex);
-  if (locked.length === n) return palette.map(c => c.hex);
-  const base = locked[0] || randomBase(r);
-  let id = modeId;
-  if (id === 'smart') {
-    const pool = ['analog', 'comp', 'split', 'triad', 'mono', 'compound', 'morandi', 'macaron', 'dopamine', 'maillard', 'earth', 'vintage', 'fresh', 'minimal', 'chinese', 'gradient', 'tetrad'];
-    id = pool[Math.floor(r() * pool.length)];
-  }
+  const fixed = palette.map((c, i) => c.locked || i === anchor);
+  const keep = palette.filter((c, i) => fixed[i]).map(c => c.hex);
+  let id = modeId === 'smart' ? SMART_POOL[Math.floor(r() * SMART_POOL.length)] : modeId;
+  if (keep.length === n) return Object.assign(palette.map(c => c.hex), { mode: id });
+  const base = anchor >= 0 && palette[anchor] ? palette[anchor].hex : keep[0] || randomBase(r);
   const scheme = SCHEMES.find(s => s.id === id);
   const mood = MOODS.find(m => m.id === id);
-  let cols = scheme ? scheme.gen(base, wheel, 20 + r() * 20) : mood.gen(base, r);
-  cols = fitTo(cols, Math.max(n, cols.length));
-  // 去掉与已锁定颜色最接近的那些，剩下的按顺序填进未锁定的位置
+  const cols = scheme ? scheme.gen(base, wheel, 20 + r() * 20) : mood.gen(base, r);
+  // 去掉与保留颜色最接近的那些（基准色自己），剩下的按重要程度依次填入
   const pool = [...cols];
-  for (const L of locked) {
+  for (const k of keep) {
+    if (!pool.length) break;
     let bi = 0;
-    pool.forEach((c, i) => { if (deltaE(c, L) < deltaE(pool[bi], L)) bi = i; });
+    pool.forEach((c, i) => { if (deltaE(c, k) < deltaE(pool[bi], k)) bi = i; });
     pool.splice(bi, 1);
   }
-  const fill = fitTo(pool.length ? pool : cols, n - locked.length);
+  const fill = extend(pool, n - keep.length, [base, ...keep]);
   let k = 0;
-  return palette.map(c => (c.locked ? c.hex : fill[k++]));
+  return Object.assign(palette.map((c, i) => (fixed[i] ? c.hex : fill[k++])), { mode: id });
+}
+/** 颜色不够时，用已有颜色的深浅变化补足，避免重复 */
+function extend(pool, need, refs) {
+  const out = pool.slice(0, need);
+  const src = [...pool, ...refs];
+  const steps = [0.55, -0.4, 0.8, -0.65, 0.3, -0.2];
+  for (let i = 0; out.length < need && i < src.length * steps.length; i++) {
+    const x = src[i % src.length], t = steps[Math.floor(i / src.length)];
+    const c = t > 0 ? mix(x, '#FFFFFF', t) : mix(x, '#000000', -t);
+    if ([...out, ...refs].every(o => deltaE(o, c) > 5)) out.push(c);
+  }
+  while (out.length < need) out.push(mix(refs[0], out.length % 2 ? '#000000' : '#FFFFFF', 0.25 + 0.08 * out.length));
+  return out;
 }
 
 // ---------- 整体调色 ----------
