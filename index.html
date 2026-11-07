@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>配色色卡</title>
+  <meta name="description" content="选色、调色、自动配色、图片取色、传统色与流行色库，导出色卡与代码。">
+  <meta name="theme-color" content="#F6F6F7" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#111113" media="(prefers-color-scheme: dark)">
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="#/"><img src="icon.svg" alt="" width="26" height="26"><span>配色色卡</span></a>
+    <nav class="nav">
+      <a href="#/">工作台</a>
+      <a href="#/harmony">自动配色</a>
+      <a href="#/image">图片取色</a>
+      <a href="#/library">色库</a>
+      <a href="#/saved">我的色卡</a>
+    </nav>
+    <button class="btn icon ghost" id="theme" aria-label="切换主题"></button>
+  </header>
+  <main id="view"></main>
+  <dialog id="dlg"></dialog>
+  <div id="toast" role="status" aria-live="polite"></div>
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>
