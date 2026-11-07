@@ -65,8 +65,29 @@ export const SCHEMES = [
   { id: 'compound', name: '复合色', desc: '类似色 + 互补色，层次丰富', usesSpread: true,
     gen: (b, m, a) => [b, rot(b, 180, m), rot(b, a, m, { dl: -10 }), rot(b, 180 + a, m, { dl: 10 }), tint(b, 0.6)] },
   { id: 'shades', name: '明暗阶梯', desc: '同一颜色从浅到深', usesSpread: false,
-    gen: b => [b, tint(b, 0.6), tint(b, -0.45), tint(b, 0.3), tint(b, -0.2)] },
+    gen(b) {
+      const L = hexToOklch(b).L;
+      const others = [tint(b, 0.6), tint(b, -0.45), tint(b, 0.3), tint(b, -0.2)];
+      return [b, ...others.sort((p, q) => Math.abs(hexToOklch(q).L - L) - Math.abs(hexToOklch(p).L - L))];
+    } },
 ];
+
+/**
+ * 运行色彩理论配色。contrast=true 时把搭配色的明暗拉开：
+ * 基准色浅 → 搭配色偏深；基准色深 → 偏浅；居中 → 一深一浅交替。保留各自的色相。
+ */
+export function runScheme(scheme, b, m, a, contrast = true) {
+  const list = scheme.gen(b, m, a);
+  if (!contrast || scheme.id === 'mono' || scheme.id === 'shades') return list;
+  const { L, C } = hexToOklch(b);
+  const T = L >= 0.62 ? [0.42, 0.56, 0.3, 0.78] : L <= 0.42 ? [0.82, 0.68, 0.92, 0.55] : [0.3, 0.86, 0.44, 0.72];
+  const floor = C < 0.02 ? 0 : Math.min(0.13, Math.max(C, 0.06));
+  return list.map((hex, i) => {
+    if (i === 0) return hex;
+    const p = hexToOklch(hex);
+    return oklchToHex({ L: T[(i - 1) % T.length], C: Math.max(p.C, floor), h: p.C < 0.01 ? hexToOklch(b).h : p.h });
+  });
+}
 
 // ---------- 风格配色（在 OKLCH 里按规则生成，可"换一组"） ----------
 const J = (r, a) => (r() * 2 - 1) * a; // 抖动
@@ -174,7 +195,7 @@ export const modeName = id => (id === 'smart' ? SMART.name : (SCHEMES.find(s => 
  * 基准色和锁定的颜色保持不动，其余位置按配色方式填入。
  * 返回 hex 数组，数组的 .mode 为实际使用的配色方式（智能随机时有用）
  */
-export function generate(palette, modeId = 'smart', wheel = 'ryb', seed = Date.now(), anchor = -1) {
+export function generate(palette, modeId = 'smart', wheel = 'ryb', seed = Date.now(), anchor = -1, contrast = true) {
   const r = rng(seed);
   const n = palette.length;
   const fixed = palette.map((c, i) => c.locked || i === anchor);
@@ -184,7 +205,7 @@ export function generate(palette, modeId = 'smart', wheel = 'ryb', seed = Date.n
   const base = anchor >= 0 && palette[anchor] ? palette[anchor].hex : keep[0] || randomBase(r);
   const scheme = SCHEMES.find(s => s.id === id);
   const mood = MOODS.find(m => m.id === id);
-  const cols = scheme ? scheme.gen(base, wheel, 20 + r() * 20) : mood.gen(base, r);
+  const cols = scheme ? runScheme(scheme, base, wheel, 20 + r() * 20, contrast) : mood.gen(base, r);
   // 去掉与保留颜色最接近的那些（基准色自己），剩下的按重要程度依次填入
   const pool = [...cols];
   for (const k of keep) {

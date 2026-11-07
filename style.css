@@ -154,6 +154,7 @@ input[type=range] { accent-color: var(--accent); width: 100%; }
 .mode-btn { min-width: 132px; justify-content: space-between; }
 .mode-btn svg:last-child { width: 15px; height: 15px; opacity: .6; }
 .anchor { margin-left: 4px; }
+.hm-contrast { margin: 14px 0 2px; }
 .col-hex { font-size: clamp(16px, 1.9vw, 24px); font-weight: 700; letter-spacing: .04em; font-family: var(--mono); cursor: copy; padding: 2px 6px; border-radius: 6px; }
 .col-hex:hover { background: color-mix(in srgb, currentColor 12%, transparent); }
 .col-name { font-size: 13px; opacity: .8; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

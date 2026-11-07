@@ -5,7 +5,7 @@ import {
 import { state, load, persist, change, subscribe, undo, redo, canUndo, canRedo, hexes, setPalette, uid } from './store.js';
 import { createPicker } from './picker.js';
 import { createWheel } from './wheel.js';
-import { SCHEMES, MOODS, SMART, modeName, generate, adjust, nearestName, autoName, scale, tints, shades, tones, fitTo, sortByLight } from './harmony.js';
+import { SCHEMES, MOODS, SMART, modeName, generate, runScheme, adjust, nearestName, autoName, scale, tints, shades, tones, fitTo, sortByLight } from './harmony.js';
 import { PREVIEW_TABS, render as renderPreview } from './preview.js';
 import { extract, drawScaled, EXTRACT_MODES } from './extract.js';
 import { TEXT_FORMATS, toText, toASE, drawCard, download } from './export.js';
@@ -271,7 +271,7 @@ function workspace() {
   });
 
   // --- 事件：工具栏 ---
-  const gen = () => applyGen(generate(state.palette, state.genMode, state.wheel, Date.now(), state.anchor ? state.sel : -1));
+  const gen = () => applyGen(generate(state.palette, state.genMode, state.wheel, Date.now(), state.anchor ? state.sel : -1, state.contrast));
   $('#gen').onclick = gen;
   $('#modeBtn').onclick = () => openModes(renderStrip);
   $('#anchor').onchange = e => { state.anchor = e.target.checked; persist(); renderStrip(); };
@@ -354,12 +354,12 @@ function openModes(onDone) {
     <div class="dlg-h modes-h">
       <div><h3>选择配色方式</h3>
         <p class="muted small">${state.anchor ? `以 <span class="dot" style="background:${base.hex}"></span> <b class="mono">${base.hex}</b> 为基准` : '随机基准色'} · ${state.palette.length} 色${state.palette.some(c => c.locked) ? ' · 锁定的颜色保持不变' : ''} · 点卡片直接使用</p></div>
-      <div class="grp"><button class="btn sm" id="mdRoll">${ICON.dice}<span>全部换一组</span></button><button class="btn icon" data-close aria-label="关闭">${ICON.x}</button></div>
+      <div class="grp"><label class="check" title="色彩理论配色时，让搭配色和基准色一深一浅，对比更明显"><input type="checkbox" id="mdContrast" ${state.contrast ? 'checked' : ''}> 拉开明暗</label><button class="btn sm" id="mdRoll">${ICON.dice}<span>全部换一组</span></button><button class="btn icon" data-close aria-label="关闭">${ICON.x}</button></div>
     </div>
     <div id="mdBody"></div>`, 'xl');
   const body = $('#mdBody', d);
   const card = m => {
-    const out = (results[m.id] = generate(state.palette, m.id, state.wheel, seeds[m.id], anchor()));
+    const out = (results[m.id] = generate(state.palette, m.id, state.wheel, seeds[m.id], anchor(), state.contrast));
     return `<div class="card mode-card ${state.genMode === m.id ? 'focus' : ''}" data-id="${m.id}" tabindex="0">
       ${stripHtml(out, 'card-strip')}
       <div class="card-b"><div><b>${m.name}${m.id === 'smart' && out.mode ? ` <small class="muted">· ${modeName(out.mode)}</small>` : ''}</b><p>${m.desc}</p></div>
@@ -383,6 +383,7 @@ function openModes(onDone) {
     onDone && onDone();
   });
   body.addEventListener('keydown', e => { if (e.key === 'Enter' && e.target.classList.contains('mode-card')) e.target.click(); });
+  $('#mdContrast', d).onchange = e => { state.contrast = e.target.checked; persist(); paint(); };
   $('#mdRoll', d).onclick = () => { Object.keys(seeds).forEach(k => (seeds[k] += 104729)); paint(); };
   paint();
 }
@@ -527,6 +528,7 @@ function harmony() {
       <div id="hmPicker"></div>
       <div class="sub">从当前色卡选一个</div>
       <div class="chips" id="hmFrom"></div>
+      <label class="check hm-contrast" title="让搭配色和基准色一深一浅，对比更明显"><input type="checkbox" id="hmContrast"> 拉开明暗（色彩理论配色）</label>
       <label class="slider-row" id="hmSpreadRow"><span>角度</span><input type="range" id="hmSpread" min="10" max="60"><output id="hmSpreadO"></output></label>
       <p class="hint">拖动色轮上的大圆点改变基础色；「角度」影响类似色、分裂互补、矩形、复合色。</p>
     </aside>
@@ -565,7 +567,7 @@ function harmony() {
     $('#hmV').value = v; $('#hmVo').textContent = v;
     $('#hmSpreadO').textContent = state.spread + '°';
     $('#hmFrom').innerHTML = state.palette.map(c => `<button class="chip-c ${c.hex === b ? 'on' : ''}" style="background:${c.hex}" data-hex="${c.hex}" title="${c.hex}"></button>`).join('');
-    SCHEMES.forEach(s => { const l = s.gen(b, state.wheel, state.spread); lists[s.id] = ['mono', 'shades'].includes(s.id) ? sortByLight(l) : l; });
+    SCHEMES.forEach(s => { const l = runScheme(s, b, state.wheel, state.spread, state.contrast); lists[s.id] = ['mono', 'shades'].includes(s.id) ? sortByLight(l) : l; });
     MOODS.forEach(m => { let r = seeds[m.id] >>> 0; const rnd = () => ((r = (r * 1664525 + 1013904223) >>> 0) / 4294967296); lists[m.id] = m.gen(b, rnd); });
     $('#hmSchemes').innerHTML = SCHEMES.map(s => card('scheme', s, lists[s.id])).join('');
     $('#hmMoods').innerHTML = MOODS.map(m => card('mood', m, lists[m.id])).join('');
@@ -592,6 +594,8 @@ function harmony() {
   $('#hmScales').addEventListener('click', e => { const r = e.target.closest('[data-row]'); if (r) return use(lists._rows[+r.dataset.row]); const h = e.target.closest('[data-hex]'); if (h) copy(h.dataset.hex); });
   $('#hmMode').onclick = e => { const m = e.target.closest('button')?.dataset.m; if (m) { state.wheel = m; persist(); paint(); } };
   $('#hmV').oninput = e => { const o = hexToHsv(state.harmonyBase); setBase(hsvToHex({ ...o, v: +e.target.value })); };
+  $('#hmContrast').checked = state.contrast;
+  $('#hmContrast').onchange = e => { state.contrast = e.target.checked; persist(); paint(); };
   $('#hmSpread').oninput = e => { state.spread = +e.target.value; persist(); nextFrame(paint); };
   $('#hmFrom').onclick = e => { const h = e.target.closest('[data-hex]')?.dataset.hex; if (h) setBase(h); };
 
